@@ -3,7 +3,7 @@
 import asyncio
 import logging
 from datetime import datetime
-from typing import AsyncIterator, List, Set
+from typing import AsyncIterator, Dict, List, Set
 
 from sqlite3 import IntegrityError
 
@@ -33,6 +33,7 @@ class MissingEventChecker:
         detection_types: Set[str],
         ignore_cameras: Set[str],
         cameras: Set[str],
+        camera_retentions: Dict[str, relativedelta] | None = None,
         interval: int = 60 * 5,
     ) -> None:
         """Init.
@@ -43,10 +44,12 @@ class MissingEventChecker:
             download_queue (asyncio.Queue): Download queue to check for on-going downloads
             downloader (VideoDownloader): Downloader to check for on-going downloads
             uploaders (List[VideoUploader]): Uploaders to check for on-going uploads
-            retention (relativedelta): Retention period to limit search window
+            retention (relativedelta): Default retention period to limit search window
             detection_types (Set[str]): Detection types wanted to limit search
             ignore_cameras (Set[str]): Ignored camera IDs to limit search
             cameras (Set[str]): Included (ONLY) camera IDs to limit search
+            camera_retentions (Dict[str, relativedelta]): Optional dictionary mapping camera IDs to retention periods.
+                                                          Used to filter out events that were intentionally purged.
             interval (int): How frequently, in seconds, to check for missing events,
 
         """
@@ -56,6 +59,7 @@ class MissingEventChecker:
         self._downloader: VideoDownloader = downloader
         self._uploaders: List[VideoUploader] = uploaders
         self.retention: relativedelta = retention
+        self.camera_retentions: Dict[str, relativedelta] = camera_retentions if camera_retentions is not None else {}
         self.detection_types: Set[str] = detection_types
         self.ignore_cameras: Set[str] = ignore_cameras
         self.cameras: Set[str] = cameras
@@ -119,9 +123,28 @@ class MissingEventChecker:
                 if wanted_event_type(event, self.detection_types, self.cameras, self.ignore_cameras)
             }
 
+            # Filter out events that are older than their camera's retention period
+            # This prevents re-downloading events that were intentionally purged
+            now = datetime.now()
+            within_retention_events = {}
+            for event_id, event in wanted_events.items():
+                # Determine retention period for this camera
+                camera_retention = self.camera_retentions.get(event.camera_id, self.retention)
+
+                # Skip events that are older than their camera's retention period
+                # These were intentionally purged, not missing
+                if event.end is not None and event.end < (now - camera_retention):
+                    logger.extra_debug(  # type: ignore
+                        f"Skipping event {event_id} from camera {event.camera_id}: "
+                        f"older than retention period ({camera_retention})"
+                    )
+                    continue
+
+                within_retention_events[event_id] = event
+
             # Yeild events one by one to allow the async loop to start other task while
             # waiting on the full list of events
-            for event in wanted_events.values():
+            for event in within_retention_events.values():
                 yield event
 
             # Last chunk was in-complete, we can stop now

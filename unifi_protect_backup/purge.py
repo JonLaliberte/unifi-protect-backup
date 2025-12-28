@@ -3,6 +3,7 @@
 import logging
 import time
 from datetime import datetime
+from typing import Dict
 
 import aiosqlite
 from dateutil.relativedelta import relativedelta
@@ -32,23 +33,26 @@ class Purge:
     def __init__(
         self,
         db: aiosqlite.Connection,
-        retention: relativedelta,
+        default_retention: relativedelta,
         rclone_destination: str,
         interval: relativedelta | None,
         rclone_purge_args: str = "",
+        camera_retentions: Dict[str, relativedelta] | None = None,
     ):
         """Init.
 
         Args:
             db (aiosqlite.Connection): Async SQlite database connection to purge clips from
-            retention (relativedelta): How long clips should be kept
+            default_retention (relativedelta): Default retention period for cameras without specific retention
             rclone_destination (str): What rclone destination the clips are stored in
             interval (relativedelta): How often to purge old clips
             rclone_purge_args (str): Optional extra arguments to pass to `rclone delete` directly.
+            camera_retentions (Dict[str, relativedelta]): Optional dictionary mapping camera IDs to retention periods.
 
         """
         self._db: aiosqlite.Connection = db
-        self.retention: relativedelta = retention
+        self.default_retention: relativedelta = default_retention
+        self.camera_retentions: Dict[str, relativedelta] = camera_retentions if camera_retentions is not None else {}
         self.rclone_destination: str = rclone_destination
         self.interval: relativedelta = interval if interval is not None else relativedelta(days=1)
         self.rclone_purge_args: str = rclone_purge_args
@@ -59,25 +63,39 @@ class Purge:
             try:
                 deleted_a_file = False
 
-                # For every event older than the retention time
-                retention_oldest_time = time.mktime((datetime.now() - self.retention).timetuple())
-                async with self._db.execute(
-                    f"SELECT * FROM events WHERE end < {retention_oldest_time}"
-                ) as event_cursor:
-                    async for event_id, event_type, camera_id, event_start, event_end in event_cursor:  # noqa: B007
-                        logger.info(f"Purging event: {event_id}.")
+                # Get all unique camera IDs from the events table
+                async with self._db.execute("SELECT DISTINCT camera_id FROM events") as camera_cursor:
+                    camera_rows = await camera_cursor.fetchall()
+                    camera_ids = [row[0] for row in camera_rows]
 
-                        # For every backup for this event
-                        async with self._db.execute(f"SELECT * FROM backups WHERE id = '{event_id}'") as backup_cursor:
-                            async for _, remote, file_path in backup_cursor:
-                                await delete_file(f"{remote}:{file_path}", self.rclone_purge_args)
-                                logger.debug(f" Deleted: {remote}:{file_path}")
-                                deleted_a_file = True
+                # Process each camera separately with its own retention period
+                for camera_id in camera_ids:
+                    # Determine retention period for this camera
+                    retention = self.camera_retentions.get(camera_id, self.default_retention)
 
-                        # delete event from database
-                        # entries in the `backups` table are automatically deleted by sqlite triggers
-                        await self._db.execute(f"DELETE FROM events WHERE id = '{event_id}'")
-                        await self._db.commit()
+                    # Calculate retention cutoff time for this camera
+                    retention_oldest_time = time.mktime((datetime.now() - retention).timetuple())
+
+                    # Query events for this specific camera that are older than the cutoff
+                    async with self._db.execute(
+                        "SELECT * FROM events WHERE camera_id = ? AND end < ?", (camera_id, retention_oldest_time)
+                    ) as event_cursor:
+                        async for event_id, event_type, event_camera_id, event_start, event_end in event_cursor:  # noqa: B007
+                            logger.info(f"Purging event: {event_id} (camera: {event_camera_id}, retention: {retention}).")
+
+                            # For every backup for this event
+                            async with self._db.execute(
+                                "SELECT * FROM backups WHERE id = ?", (event_id,)
+                            ) as backup_cursor:
+                                async for _, remote, file_path in backup_cursor:
+                                    await delete_file(f"{remote}:{file_path}", self.rclone_purge_args)
+                                    logger.debug(f" Deleted: {remote}:{file_path}")
+                                    deleted_a_file = True
+
+                            # delete event from database
+                            # entries in the `backups` table are automatically deleted by sqlite triggers
+                            await self._db.execute("DELETE FROM events WHERE id = ?", (event_id,))
+                            await self._db.commit()
 
                 if deleted_a_file:
                     await tidy_empty_dirs(self.rclone_destination)

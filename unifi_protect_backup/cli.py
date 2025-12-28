@@ -53,6 +53,69 @@ def parse_rclone_retention(ctx, param, retention) -> relativedelta | None:
     )
 
 
+def parse_camera_retentions(ctx, param, value) -> dict[str, relativedelta]:
+    """Parse camera retention pairs from CLI or environment variable.
+
+    Accepts format CAMERA_ID:RETENTION (e.g., "CAMERA_ID1:7d" or "CAMERA_ID2:30d").
+    Can be used multiple times or as whitespace-separated values in environment variable.
+
+    Args:
+        ctx: Click context
+        param: Click parameter
+        value: Tuple of strings in format "CAMERA_ID:RETENTION" (from multiple=True)
+
+    Returns:
+        Dictionary mapping camera_id -> relativedelta
+
+    Raises:
+        click.BadParameter: If format is invalid
+    """
+    if not value:
+        return {}
+
+    # With multiple=True, Click passes a tuple of all values
+    # Environment variable values are automatically split by whitespace
+    values = value if isinstance(value, (tuple, list)) else [value]
+
+    camera_retentions = {}
+    for val in values:
+        if ":" not in val:
+            raise click.BadParameter(
+                f"Invalid format: '{val}'. Expected format: CAMERA_ID:RETENTION (e.g., CAMERA_ID1:7d)",
+                ctx=ctx,
+                param=param,
+            )
+
+        camera_id, retention_str = val.split(":", 1)
+        camera_id = camera_id.strip()
+        retention_str = retention_str.strip()
+
+        if not camera_id:
+            raise click.BadParameter(
+                f"Invalid format: '{val}'. Camera ID cannot be empty.",
+                ctx=ctx,
+                param=param,
+            )
+
+        try:
+            retention = parse_rclone_retention(ctx, param, retention_str)
+            if retention is None:
+                raise click.BadParameter(
+                    f"Invalid retention format: '{retention_str}'",
+                    ctx=ctx,
+                    param=param,
+                )
+            camera_retentions[camera_id] = retention
+        except click.BadParameter as e:
+            raise click.BadParameter(
+                f"Invalid retention format in '{val}': {e.message}",
+                ctx=ctx,
+                param=param,
+            ) from e
+
+    return camera_retentions
+
+
 @click.command(context_settings=dict(max_content_width=100))
 @click.version_option(__version__)
 @click.option("--address", required=True, envvar="UFP_ADDRESS", help="Address of Unifi Protect instance")
@@ -134,6 +197,17 @@ def parse_rclone_retention(ctx, param, retention) -> relativedelta | None:
     "multiple IDs. If being set as an environment variable the IDs should be separated by whitespace. "
     "Alternatively, use a Unifi user with a role which has access restricted to the subset of cameras "
     "that you wish to backup.",
+)
+@click.option(
+    "--camera-retention",
+    "camera_retentions",
+    multiple=True,
+    envvar="CAMERA_RETENTIONS",
+    help="Set retention period for a specific camera. Format: CAMERA_ID:RETENTION (e.g., --camera-retention CAMERA_ID1:7d). "
+    "Use multiple times to set retention for multiple cameras. If being set as an environment variable, "
+    "the pairs should be separated by whitespace. Cameras without explicit retention settings will use "
+    "the default --retention value.",
+    callback=parse_camera_retentions,
 )
 @click.option(
     "--file-structure-format",

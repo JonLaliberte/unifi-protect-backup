@@ -154,6 +154,12 @@ Options:
                                   environment variable the IDs should be separated by whitespace.
                                   Alternatively, use a Unifi user with a role which has access
                                   restricted to the subset of cameras that you wish to backup.
+  --camera-retention TEXT         Set retention period for a specific camera. Format:
+                                  CAMERA_ID:RETENTION (e.g., --camera-retention CAMERA_ID1:7d). Use
+                                  multiple times to set retention for multiple cameras. If being set
+                                  as an environment variable, the pairs should be separated by
+                                  whitespace. Cameras without explicit retention settings will use
+                                  the default --retention value.
   --file-structure-format TEXT    A Python format string used to generate the file structure/name
                                   on the rclone remote.For details of the fields available, see
                                   the projects `README.md` file.  [default: {camera_name}/{event.s
@@ -231,6 +237,7 @@ always take priority over environment variables):
 - `RCLONE_PURGE_ARGS`
 - `IGNORE_CAMERAS`
 - `CAMERAS`
+- `CAMERA_RETENTIONS`
 - `DETECTION_TYPES`
 - `FILE_STRUCTURE_FORMAT`
 - `SQLITE_PATH`
@@ -303,6 +310,28 @@ and run the following command:
 $ unifi-protect-backup [...] --ignore-camera CAMERA_ID_1 --ignore-camera CAMERA_ID_2
 ```
 Only `CAMERA_ID_3` will be backed up.
+
+### Per-camera retention periods
+
+By using the `--camera-retention` argument, you can set different retention periods for different cameras. This is useful if you want to keep some cameras' footage longer than others. Cameras without explicit retention settings will use the default `--retention` value.
+
+#### Example:
+If you have three cameras and want different retention periods:
+  - `CAMERA_ID_1`: Keep for 7 days (default)
+  - `CAMERA_ID_2`: Keep for 30 days
+  - `CAMERA_ID_3`: Keep for 90 days
+
+You can run:
+```
+$ unifi-protect-backup [...] --retention 7d --camera-retention CAMERA_ID_2:30d --camera-retention CAMERA_ID_3:90d
+```
+
+Or using environment variable:
+```
+CAMERA_RETENTIONS="CAMERA_ID_2:30d CAMERA_ID_3:90d" unifi-protect-backup [...] --retention 7d
+```
+
+**Note**: The missing event checker will automatically skip events that are older than their camera's retention period to prevent re-downloading events that were intentionally purged.
 
 ### Note about unifi protect accounts
 It is possible to limit what cameras a unifi protect accounts can see. If an account does not have access to a camera this tool will never see it as available so it will not be impacted by the above arguments.

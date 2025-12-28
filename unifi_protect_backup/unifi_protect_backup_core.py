@@ -5,7 +5,7 @@ import logging
 import os
 import shutil
 from datetime import datetime, timedelta, timezone
-from typing import Callable, List
+from typing import Callable, Dict, List
 
 import aiosqlite
 from dateutil.relativedelta import relativedelta
@@ -87,6 +87,7 @@ class UnifiProtectBackup:
         port: int = 443,
         use_experimental_downloader: bool = False,
         parallel_uploads: int = 1,
+        camera_retentions: Dict[str, relativedelta] | None = None,
     ):
         """Will configure logging settings and the Unifi Protect API (but not actually connect).
 
@@ -125,6 +126,8 @@ class UnifiProtectBackup:
             use_experimental_downloader (bool): Use the new experimental downloader (the same method as used by the
                                                 webUI)
             parallel_uploads (int): Max number of parallel uploads to allow
+            camera_retentions (Dict[str, relativedelta]): Dictionary mapping camera IDs to their retention periods.
+                                                          Cameras not in this dict will use the default retention.
 
         """
         self.color_logging = color_logging
@@ -166,6 +169,7 @@ class UnifiProtectBackup:
         logger.debug(f"  {max_event_length=}s")
         logger.debug(f"  {use_experimental_downloader=}")
         logger.debug(f"  {parallel_uploads=}")
+        logger.debug(f"  {camera_retentions=}")
 
         self.rclone_destination = rclone_destination
         self.retention = retention
@@ -203,6 +207,7 @@ class UnifiProtectBackup:
         self._max_event_length = timedelta(seconds=max_event_length)
         self._use_experimental_downloader = use_experimental_downloader
         self._parallel_uploads = parallel_uploads
+        self._camera_retentions = camera_retentions if camera_retentions is not None else {}
 
     async def start(self):
         """Bootstrap the backup process and kick off the main loop.
@@ -317,6 +322,7 @@ class UnifiProtectBackup:
                 self.rclone_destination,
                 self._purge_interval,
                 self.rclone_purge_args,
+                self._camera_retentions,
             )
             tasks.append(purge.start())
 
@@ -333,6 +339,7 @@ class UnifiProtectBackup:
                 self.detection_types,
                 self.ignore_cameras,
                 self.cameras,
+                self._camera_retentions,
             )
             if self._skip_missing:
                 logger.info("Ignoring missing events")
