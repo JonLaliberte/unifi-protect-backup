@@ -58,17 +58,7 @@ def parse_camera_retentions(ctx, param, value) -> dict[str, relativedelta]:
 
     Accepts format CAMERA_ID:RETENTION (e.g., "CAMERA_ID1:7d" or "CAMERA_ID2:30d").
     Can be used multiple times or as whitespace-separated values in environment variable.
-
-    Args:
-        ctx: Click context
-        param: Click parameter
-        value: Tuple of strings in format "CAMERA_ID:RETENTION" (from multiple=True)
-
-    Returns:
-        Dictionary mapping camera_id -> relativedelta
-
-    Raises:
-        click.BadParameter: If format is invalid
+    Returns a dictionary mapping camera IDs to retention periods.
     """
     if not value:
         return {}

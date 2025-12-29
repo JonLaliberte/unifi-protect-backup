@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import AsyncIterator, Dict, List, Set
 
 from sqlite3 import IntegrityError
@@ -125,7 +125,8 @@ class MissingEventChecker:
 
             # Filter out events that are older than their camera's retention period
             # This prevents re-downloading events that were intentionally purged
-            now = datetime.now()
+            # Events from API are timezone-aware (UTC), so use UTC for comparison
+            now = datetime.now(timezone.utc)
             within_retention_events = {}
             for event_id, event in wanted_events.items():
                 # Determine retention period for this camera
@@ -133,12 +134,16 @@ class MissingEventChecker:
 
                 # Skip events that are older than their camera's retention period
                 # These were intentionally purged, not missing
-                if event.end is not None and event.end < (now - camera_retention):
-                    logger.extra_debug(  # type: ignore
-                        f"Skipping event {event_id} from camera {event.camera_id}: "
-                        f"older than retention period ({camera_retention})"
-                    )
-                    continue
+                # Ensure event.end is timezone-aware for comparison
+                if event.end is not None:
+                    # If event.end is naive, assume UTC (though it shouldn't be from API)
+                    event_end = event.end if event.end.tzinfo is not None else event.end.replace(tzinfo=timezone.utc)
+                    if event_end < (now - camera_retention):
+                        logger.extra_debug(  # type: ignore
+                            f"Skipping event {event_id} from camera {event.camera_id}: "
+                            f"older than retention period ({camera_retention})"
+                        )
+                        continue
 
                 within_retention_events[event_id] = event
 
