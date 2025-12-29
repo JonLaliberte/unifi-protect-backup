@@ -90,11 +90,25 @@ def parse_camera_retentions(ctx, param, value) -> dict[str, relativedelta]:
                 param=param,
             )
 
+        if not retention_str:
+            raise click.BadParameter(
+                f"Invalid format: '{val}'. Retention period cannot be empty.",
+                ctx=ctx,
+                param=param,
+            )
+
         try:
             retention = parse_relative_time(ctx, param, retention_str)
             if retention is None:
                 raise click.BadParameter(
                     f"Invalid retention format: '{retention_str}'",
+                    ctx=ctx,
+                    param=param,
+                )
+            # Check for zero-duration retention which would filter out all events
+            if retention == relativedelta():
+                raise click.BadParameter(
+                    f"Invalid retention in '{val}': retention period cannot be zero.",
                     ctx=ctx,
                     param=param,
                 )
