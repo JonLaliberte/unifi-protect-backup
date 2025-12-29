@@ -24,6 +24,7 @@ from unifi_protect_backup import (
 from unifi_protect_backup.utils import (
     SubprocessException,
     VideoQueue,
+    format_retention,
     human_readable_size,
     run_command,
     setup_logging,
@@ -252,7 +253,13 @@ class UnifiProtectBackup:
             # Get a mapping of camera ids -> names
             logger.info("Found cameras:")
             for camera in self._protect.bootstrap.cameras.values():
-                logger.info(f" - {camera.id}: {camera.name}")
+                # Determine retention for this camera
+                camera_retention = self._camera_retentions.get(camera.id, self.retention)
+                retention_str = format_retention(camera_retention)
+                if camera.id in self._camera_retentions:
+                    logger.info(f" - {camera.id}: {camera.name} (retention: {retention_str})")
+                else:
+                    logger.info(f" - {camera.id}: {camera.name} (retention: {retention_str}, default)")
 
             # Print timezone info for debugging
             logger.debug(f"NVR TZ: {self._protect.bootstrap.nvr.timezone}")

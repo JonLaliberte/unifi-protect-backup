@@ -8,7 +8,7 @@ from typing import Dict
 import aiosqlite
 from dateutil.relativedelta import relativedelta
 
-from unifi_protect_backup.utils import run_command, wait_until
+from unifi_protect_backup.utils import format_retention, run_command, wait_until
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +81,8 @@ class Purge:
                         "SELECT * FROM events WHERE camera_id = ? AND end < ?", (camera_id, retention_oldest_time)
                     ) as event_cursor:
                         async for event_id, event_type, event_camera_id, event_start, event_end in event_cursor:  # noqa: B007
-                            logger.info(f"Purging event: {event_id} (camera: {event_camera_id}, retention: {retention}).")
+                            retention_str = format_retention(retention)
+                            logger.info(f"Purging event: {event_id} (camera: {event_camera_id}, retention: {retention_str})")
 
                             # For every backup for this event
                             async with self._db.execute(

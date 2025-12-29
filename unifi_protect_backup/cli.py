@@ -30,8 +30,11 @@ def _parse_detection_types(ctx, param, value):
     return types
 
 
-def parse_rclone_retention(ctx, param, retention) -> relativedelta | None:
-    """Parse the rclone `retention` parameter into a relativedelta which can then be used to calculate datetimes."""
+def parse_relative_time(ctx, param, retention) -> relativedelta | None:
+    """Parse a relative time string (e.g., '7d', '1h', '30m') into a relativedelta.
+
+    Format matches rclone's time option format: https://rclone.org/docs/#time-option
+    """
     if retention is None:
         return None
 
@@ -88,7 +91,7 @@ def parse_camera_retentions(ctx, param, value) -> dict[str, relativedelta]:
             )
 
         try:
-            retention = parse_rclone_retention(ctx, param, retention_str)
+            retention = parse_relative_time(ctx, param, retention_str)
             if retention is None:
                 raise click.BadParameter(
                     f"Invalid retention format: '{retention_str}'",
@@ -130,10 +133,11 @@ def parse_camera_retentions(ctx, param, value) -> dict[str, relativedelta]:
     "--retention",
     default="7d",
     show_default=True,
-    envvar="RCLONE_RETENTION",
+    envvar=["DEFAULT_RETENTION", "RCLONE_RETENTION"],
     help="How long should event clips be backed up for. Format as per the `--max-age` argument of `rclone` "
-    "(https://rclone.org/filtering/#max-age-don-t-transfer-any-file-older-than-this)",
-    callback=parse_rclone_retention,
+    "(https://rclone.org/filtering/#max-age-don-t-transfer-any-file-older-than-this). "
+    "Also accepts DEFAULT_RETENTION environment variable as an alias for RCLONE_RETENTION.",
+    callback=parse_relative_time,
 )
 @click.option(
     "--missing-range",
@@ -142,7 +146,7 @@ def parse_camera_retentions(ctx, param, value) -> dict[str, relativedelta]:
     help="How far back should missing events be checked for. Defaults to the same as the retention time. "
     "Format as per the `--max-age` argument of `rclone` "
     "(https://rclone.org/filtering/#max-age-don-t-transfer-any-file-older-than-this)",
-    callback=parse_rclone_retention,
+    callback=parse_relative_time,
 )
 @click.option(
     "--rclone-args",
@@ -256,7 +260,7 @@ all warnings, and websocket data
     envvar="PURGE_INTERVAL",
     help="How frequently to check for file to purge.\n\nNOTE: Can create a lot of API calls, so be careful if "
     "your cloud provider charges you per api call",
-    callback=parse_rclone_retention,
+    callback=parse_relative_time,
 )
 @click.option(
     "--apprise-notifier",

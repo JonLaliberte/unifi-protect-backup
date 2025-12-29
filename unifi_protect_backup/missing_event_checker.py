@@ -65,8 +65,31 @@ class MissingEventChecker:
         self.cameras: Set[str] = cameras
         self.interval: int = interval
 
+    def _get_max_retention(self) -> relativedelta:
+        """Calculate the maximum retention period across all cameras.
+
+        Returns the longest retention period from either the default retention
+        or any per-camera retention setting. This ensures we search back far
+        enough to find all events that might need to be backed up.
+
+        Returns:
+            relativedelta: The maximum retention period
+        """
+        max_retention = self.retention
+        for camera_retention in self.camera_retentions.values():
+            # Compare by converting to total days (approximate for months/years)
+            # We'll use a reference date to handle months/years correctly
+            now = datetime.now()
+            default_cutoff = now - max_retention
+            camera_cutoff = now - camera_retention
+            if camera_cutoff < default_cutoff:
+                max_retention = camera_retention
+        return max_retention
+
     async def _get_missing_events(self) -> AsyncIterator[Event]:
-        start_time = datetime.now() - self.retention
+        # Use maximum retention to ensure we fetch all events that might need backup
+        max_retention = self._get_max_retention()
+        start_time = datetime.now() - max_retention
         end_time = datetime.now()
         chunk_size = 500
 

@@ -8,6 +8,7 @@ from typing import Optional, Set
 
 from apprise import NotifyType
 from async_lru import alru_cache
+from dateutil.relativedelta import relativedelta
 from uiprotect import ProtectApiClient
 from uiprotect.data.nvr import Event
 from uiprotect.data.types import EventType, SmartDetectObjectType, SmartDetectAudioType
@@ -297,6 +298,36 @@ def human_readable_size(num: float):
             return f"{num:3.1f}{unit}"
         num /= 1024.0
     raise ValueError("`num` too large, ran out of prefixes")
+
+
+def format_retention(retention: relativedelta) -> str:
+    """Format a relativedelta as a human-readable retention string (e.g., '1h', '7d', '30m').
+
+    Args:
+        retention (relativedelta): The retention period to format
+
+    Returns:
+        str: Human-readable retention string in rclone format
+    """
+    parts = []
+    if retention.years:
+        parts.append(f"{retention.years}y")
+    if retention.months:
+        parts.append(f"{retention.months}M")
+    if retention.weeks:
+        parts.append(f"{retention.weeks}w")
+    if retention.days:
+        parts.append(f"{retention.days}d")
+    if retention.hours:
+        parts.append(f"{retention.hours}h")
+    if retention.minutes:
+        parts.append(f"{retention.minutes}m")
+    if retention.seconds:
+        parts.append(f"{retention.seconds}s")
+    if retention.microseconds:
+        parts.append(f"{retention.microseconds // 1000}ms")
+
+    return "".join(parts) if parts else "0s"
 
 
 def human_readable_to_float(num: str):
