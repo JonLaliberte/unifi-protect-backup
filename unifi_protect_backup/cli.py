@@ -101,7 +101,7 @@ def parse_camera_retentions(ctx, param, value) -> dict[str, relativedelta]:
             camera_retentions[camera_id] = retention
         except click.BadParameter as e:
             raise click.BadParameter(
-                f"Invalid retention format in '{val}': {e.message}",
+                f"Invalid retention format in '{val}': {str(e)}",
                 ctx=ctx,
                 param=param,
             ) from e

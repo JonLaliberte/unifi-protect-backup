@@ -347,6 +347,7 @@ class UnifiProtectBackup:
                 self.ignore_cameras,
                 self.cameras,
                 self._camera_retentions,
+                self.retention,  # Pass actual backup retention period for filtering
             )
             if self._skip_missing:
                 logger.info("Ignoring missing events")

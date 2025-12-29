@@ -34,6 +34,7 @@ class MissingEventChecker:
         ignore_cameras: Set[str],
         cameras: Set[str],
         camera_retentions: Dict[str, relativedelta] | None = None,
+        default_retention: relativedelta | None = None,
         interval: int = 60 * 5,
     ) -> None:
         """Init.
@@ -44,12 +45,14 @@ class MissingEventChecker:
             download_queue (asyncio.Queue): Download queue to check for on-going downloads
             downloader (VideoDownloader): Downloader to check for on-going downloads
             uploaders (List[VideoUploader]): Uploaders to check for on-going uploads
-            retention (relativedelta): Default retention period to limit search window
+            retention (relativedelta): Search window period (missing_range) to limit how far back to search
             detection_types (Set[str]): Detection types wanted to limit search
             ignore_cameras (Set[str]): Ignored camera IDs to limit search
             cameras (Set[str]): Included (ONLY) camera IDs to limit search
             camera_retentions (Dict[str, relativedelta]): Optional dictionary mapping camera IDs to retention periods.
                                                           Used to filter out events that were intentionally purged.
+            default_retention (relativedelta): Default backup retention period for filtering events.
+                                              If None, defaults to retention (search window).
             interval (int): How frequently, in seconds, to check for missing events,
 
         """
@@ -58,7 +61,8 @@ class MissingEventChecker:
         self._download_queue: asyncio.Queue = download_queue
         self._downloader: VideoDownloader = downloader
         self._uploaders: List[VideoUploader] = uploaders
-        self.retention: relativedelta = retention
+        self.retention: relativedelta = retention  # Search window (missing_range)
+        self.default_retention: relativedelta = default_retention if default_retention is not None else retention
         self.camera_retentions: Dict[str, relativedelta] = camera_retentions if camera_retentions is not None else {}
         self.detection_types: Set[str] = detection_types
         self.ignore_cameras: Set[str] = ignore_cameras
@@ -66,23 +70,33 @@ class MissingEventChecker:
         self.interval: int = interval
 
     def _get_max_retention(self) -> relativedelta:
-        """Calculate the maximum retention period across all cameras.
+        """Calculate the maximum period to search back.
 
-        Returns the longest retention period from either the default retention
-        or any per-camera retention setting. This ensures we search back far
-        enough to find all events that might need to be backed up.
+        Returns the maximum of:
+        - The search window (retention/missing_range)
+        - The default backup retention period
+        - All per-camera retention periods
+
+        This ensures we search back far enough to find all events that might need to be backed up.
 
         Returns:
-            relativedelta: The maximum retention period
+            relativedelta: The maximum period to search back
         """
+        # Start with the search window
         max_retention = self.retention
+        
+        # Compare with default backup retention
+        now = datetime.now()
+        search_cutoff = now - max_retention
+        default_retention_cutoff = now - self.default_retention
+        if default_retention_cutoff < search_cutoff:
+            max_retention = self.default_retention
+        
+        # Compare with all per-camera retention periods
         for camera_retention in self.camera_retentions.values():
-            # Compare by converting to total days (approximate for months/years)
-            # We'll use a reference date to handle months/years correctly
-            now = datetime.now()
-            default_cutoff = now - max_retention
             camera_cutoff = now - camera_retention
-            if camera_cutoff < default_cutoff:
+            current_cutoff = now - max_retention
+            if camera_cutoff < current_cutoff:
                 max_retention = camera_retention
         return max_retention
 
@@ -152,8 +166,8 @@ class MissingEventChecker:
             now = datetime.now(timezone.utc)
             within_retention_events = {}
             for event_id, event in wanted_events.items():
-                # Determine retention period for this camera
-                camera_retention = self.camera_retentions.get(event.camera_id, self.retention)
+                # Determine retention period for this camera (use actual backup retention, not search window)
+                camera_retention = self.camera_retentions.get(event.camera_id, self.default_retention)
 
                 # Skip events that are older than their camera's retention period
                 # These were intentionally purged, not missing
