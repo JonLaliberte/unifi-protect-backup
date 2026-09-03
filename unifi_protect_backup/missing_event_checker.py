@@ -88,7 +88,9 @@ class MissingEventChecker:
             if not unifi_events:
                 break  # No completed events to process
 
-            # Next chunks start time should be the start of the oldest complete event in the current chunk
+            # `get_events` defaults to sorting="asc", so a chunk arrives oldest-first and the
+            # newest start in it is where the next chunk resumes. (The comment here used to say
+            # "oldest", which contradicts the `max` and reads like a bug that isn't one.)
             start_time = max([event.start for event in unifi_events.values() if event.end is not None])
 
             # Get list of events that have been backed up from the database.

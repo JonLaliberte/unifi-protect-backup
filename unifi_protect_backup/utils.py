@@ -6,8 +6,6 @@ import re
 from datetime import datetime
 from typing import Optional, Set
 
-from sqlite3 import IntegrityError
-
 import aiosqlite
 from apprise import NotifyType
 from async_lru import alru_cache
@@ -307,20 +305,20 @@ async def insert_event(db: aiosqlite.Connection, event: Event) -> bool:
     """
     assert isinstance(event.start, datetime)
     assert isinstance(event.end, datetime)
-    try:
-        await db.execute(
-            "INSERT INTO events VALUES (?, ?, ?, ?, ?)",
-            (
-                event.id,
-                event.type.value,
-                event.camera_id,
-                event.start.timestamp(),
-                event.end.timestamp(),
-            ),
-        )
-    except IntegrityError:
-        return False
-    return True
+    # `ON CONFLICT(id) DO NOTHING` rather than catching IntegrityError, so that only a
+    # repeated event is treated as "already recorded". Any other integrity failure still
+    # raises instead of being reported as a duplicate.
+    cursor = await db.execute(
+        "INSERT INTO events VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING",
+        (
+            event.id,
+            event.type.value,
+            event.camera_id,
+            event.start.timestamp(),
+            event.end.timestamp(),
+        ),
+    )
+    return cursor.rowcount == 1
 
 
 def human_readable_size(num: float):

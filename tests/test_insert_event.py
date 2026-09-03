@@ -5,49 +5,14 @@ callers use the return value to decide whether to write a related `backups` row 
 duplicate event must never gain a second backup row.
 """
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
-
-import pytest
-
-from unifi_protect_backup.unifi_protect_backup_core import create_database
 from unifi_protect_backup.utils import insert_event
 
-
-@dataclass
-class _Type:
-    """Stand-in for uiprotect's EventType enum."""
-
-    value: str
+from .conftest import EVENT_ID, FakeEvent
 
 
-@dataclass
-class _Event:
-    """Minimal stand-in for uiprotect's Event, carrying only what insert_event reads."""
-
-    id: str
-    type: _Type
-    camera_id: str
-    start: datetime
-    end: datetime
-
-
-def _event(event_id: str = "f9f5a34b-867d-4001-9b42-c3429c1785df", camera_id: str = "cam1") -> _Event:
-    return _Event(
-        id=event_id,
-        type=_Type("motion"),
-        camera_id=camera_id,
-        start=datetime(2026, 9, 1, 12, 0, 0, tzinfo=timezone.utc),
-        end=datetime(2026, 9, 1, 12, 0, 30, tzinfo=timezone.utc),
-    )
-
-
-@pytest.fixture
-async def db():
-    """Build an in-memory database using the real production schema."""
-    connection = await create_database(":memory:")
-    yield connection
-    await connection.close()
+def _event(event_id: str = EVENT_ID, camera_id: str = "cam1") -> FakeEvent:
+    """Build a stand-in event with overridable identity fields."""
+    return FakeEvent(id=event_id, camera_id=camera_id)
 
 
 async def test_new_event_is_written(db):

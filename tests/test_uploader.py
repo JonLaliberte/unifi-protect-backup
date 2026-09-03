@@ -7,31 +7,11 @@ already there. These tests pin the check ahead of the upload.
 """
 
 import asyncio
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
 
-import pytest
-
-from unifi_protect_backup.unifi_protect_backup_core import create_database
 from unifi_protect_backup.uploader import VideoUploader
 from unifi_protect_backup.utils import SubprocessException, VideoQueue, insert_event
 
-START = datetime(2026, 9, 1, 12, 0, 0, tzinfo=timezone.utc)
-EVENT_ID = "f9f5a34b-867d-4001-9b42-c3429c1785df"
-
-
-@dataclass
-class _Type:
-    value: str
-
-
-@dataclass
-class _Event:
-    id: str
-    type: _Type = field(default_factory=lambda: _Type("motion"))
-    camera_id: str = "cam1"
-    start: datetime = START
-    end: datetime = START + timedelta(seconds=30)
+from .conftest import EVENT_ID, FakeEvent as _Event
 
 
 class _Uploader(VideoUploader):
@@ -64,25 +44,31 @@ class _Uploader(VideoUploader):
         self.uploaded.append(destination)
 
 
-@pytest.fixture
-async def db():
-    """Build an in-memory database using the real production schema."""
-    connection = await create_database(":memory:")
-    yield connection
-    await connection.close()
+DRAIN_TIMEOUT = 5.0
+POLL_INTERVAL = 0.001
 
 
 async def drain(*uploaders):
-    """Run the uploader loops until their queues empty, then stop them."""
+    """Run the uploader loops until every queued item is fully processed, then stop them.
+
+    Waits on the uploaders actually going idle rather than on a fixed sleep. An uploader
+    sets `current_event` the moment it dequeues and clears it in a `finally`, so an empty
+    queue plus a null `current_event` on every uploader means no work is in flight. A
+    wall-clock settle would cancel the tasks mid-upload on a slow machine and fail with a
+    confusing assertion instead of a timeout.
+    """
     tasks = [asyncio.create_task(u.start()) for u in uploaders]
-    for _ in range(200):
-        await asyncio.sleep(0.005)
-        if all(u.upload_queue.qsize_files() == 0 for u in uploaders):
-            break
-    await asyncio.sleep(0.02)
-    for task in tasks:
-        task.cancel()
-    await asyncio.gather(*tasks, return_exceptions=True)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + DRAIN_TIMEOUT
+    try:
+        while not all(u.upload_queue.qsize_files() == 0 and u.current_event is None for u in uploaders):
+            if loop.time() > deadline:
+                raise AssertionError(f"uploaders did not drain within {DRAIN_TIMEOUT}s")
+            await asyncio.sleep(POLL_INTERVAL)
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def test_new_event_is_uploaded_and_recorded(db):

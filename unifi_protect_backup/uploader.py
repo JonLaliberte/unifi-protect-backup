@@ -48,7 +48,7 @@ class VideoUploader:
             file_structure_format (str): format string for how to structure the uploaded files
             db (aiosqlite.Connection): Async SQlite database connection
             color_logging (bool):  Whether or not to add color to logging output
-            uploading_event_ids (Set[str]): IDs currently being uploaded, shared by every
+            uploading_event_ids (Optional[Set[str]]): IDs currently being uploaded, shared by every
                 uploader. The database check alone cannot stop two uploaders racing, since
                 the row is only written once the upload finishes. Defaults to a private set,
                 which is correct when there is only one uploader.
@@ -160,7 +160,7 @@ class VideoUploader:
         if returncode != 0:
             raise SubprocessException(stdout, stderr, returncode)
 
-    async def _update_database(self, event: Event, destination: str) -> bool:
+    async def _update_database(self, event: Event, destination: pathlib.Path) -> bool:
         """Add the backed up event to the database along with where it was backed up to.
 
         Returns:
@@ -169,9 +169,16 @@ class VideoUploader:
 
         """
         if not await insert_event(self._db, event):
+            # Nothing of ours was written, but the INSERT still opened a transaction and
+            # took the write lock. Commit to close it rather than leaving it for whichever
+            # unrelated task commits next. Rollback would be wrong here: every component
+            # shares this connection, so it would discard their pending writes too.
+            await self._db.commit()
             return False
 
-        remote, file_path = str(destination).split(":")
+        # Split once: the remote name is everything before the first colon, and an
+        # rclone path may legally contain further colons.
+        remote, file_path = str(destination).split(":", 1)
         await self._db.execute(
             "INSERT INTO backups VALUES (?, ?, ?)",
             (event.id, remote, file_path),

@@ -9,13 +9,11 @@ needs covering.
 import asyncio
 from datetime import datetime, timedelta, timezone
 
-import pytest
 from dateutil.relativedelta import relativedelta
 from uiprotect.data.nvr import Event
 from uiprotect.data.types import EventType
 
 from unifi_protect_backup.missing_event_checker import SQL_MAX_VARIABLES, MissingEventChecker
-from unifi_protect_backup.unifi_protect_backup_core import create_database
 from unifi_protect_backup.utils import VideoQueue, insert_event
 
 CAMERA = "67cb31f301131a03e401cf0e"
@@ -75,14 +73,6 @@ def make_checker(db, events):
         ignore_cameras=set(),
         cameras=set(),
     )
-
-
-@pytest.fixture
-async def db():
-    """Build an in-memory database using the real production schema."""
-    connection = await create_database(":memory:")
-    yield connection
-    await connection.close()
 
 
 async def collect(checker):
