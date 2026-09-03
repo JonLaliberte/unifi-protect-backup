@@ -16,6 +16,11 @@ from unifi_protect_backup.utils import EVENT_TYPES_MAP, insert_event, wanted_eve
 
 logger = logging.getLogger(__name__)
 
+# Cap on bound parameters per statement. SQLite's own limit is 999 on older builds and
+# 32766 on modern ones; batching well under the lower bound keeps this correct wherever
+# it runs, and independent of the event chunk size.
+SQL_MAX_VARIABLES = 400
+
 
 class MissingEventChecker:
     """Periodically checks if any unifi protect events exist within the retention period that are not backed up."""
@@ -86,12 +91,22 @@ class MissingEventChecker:
             # Next chunks start time should be the start of the oldest complete event in the current chunk
             start_time = max([event.start for event in unifi_events.values() if event.end is not None])
 
-            # Get list of events that have been backed up from the database
-
-            # events(id, type, camera_id, start, end)
-            async with self._db.execute("SELECT * FROM events") as cursor:
-                rows = await cursor.fetchall()
-                db_event_ids = {row[0] for row in rows}
+            # Get list of events that have been backed up from the database.
+            #
+            # Only this chunk's IDs are ever tested against `existing_ids` below, so ask
+            # for those rather than the whole table. Reading every row cost ~535MB and
+            # ~3s of event loop time on a 1.35M row database, once per chunk, every
+            # interval, while the download buffer already holds up to 512MiB.
+            db_event_ids: Set[str] = set()
+            chunk_ids = list(unifi_events)
+            for i in range(0, len(chunk_ids), SQL_MAX_VARIABLES):
+                batch = chunk_ids[i : i + SQL_MAX_VARIABLES]
+                # Only `?` placeholders are interpolated here; the IDs are bound.
+                placeholders = ",".join("?" * len(batch))
+                async with self._db.execute(
+                    f"SELECT id FROM events WHERE id IN ({placeholders})", batch
+                ) as cursor:
+                    db_event_ids.update(row[0] for row in await cursor.fetchall())
 
             # Prevent re-adding events currently in the download/upload queue
             downloading_event_ids = {event.id for event in self._downloader.download_queue._queue}  # type: ignore
