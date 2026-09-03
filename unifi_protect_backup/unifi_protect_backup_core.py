@@ -288,6 +288,10 @@ class UnifiProtectBackup:
             # Create upload tasks
             #   This will upload the videos in the downloader's buffer to the rclone remotes and log it in the database
             uploaders = []
+            # Shared by every uploader so two of them cannot upload the same event at
+            # once. The database only records a backup after rclone returns, so it cannot
+            # close that window on its own.
+            uploading_event_ids: set[str] = set()
             for _ in range(self._parallel_uploads):
                 uploader = VideoUploader(
                     self._protect,
@@ -297,6 +301,7 @@ class UnifiProtectBackup:
                     self.file_structure_format,
                     self._db,
                     self.color_logging,
+                    uploading_event_ids,
                 )
                 uploaders.append(uploader)
                 tasks.append(uploader.start())
