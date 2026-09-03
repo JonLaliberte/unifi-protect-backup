@@ -5,8 +5,6 @@ import logging
 from datetime import datetime
 from typing import AsyncIterator, List, Set
 
-from sqlite3 import IntegrityError
-
 import aiosqlite
 from dateutil.relativedelta import relativedelta
 from uiprotect import ProtectApiClient
@@ -14,7 +12,7 @@ from uiprotect.data.nvr import Event
 from uiprotect.data.types import EventType
 
 from unifi_protect_backup import VideoDownloader, VideoUploader
-from unifi_protect_backup.utils import EVENT_TYPES_MAP, wanted_event_type
+from unifi_protect_backup.utils import EVENT_TYPES_MAP, insert_event, wanted_event_type
 
 logger = logging.getLogger(__name__)
 
@@ -134,13 +132,7 @@ class MissingEventChecker:
 
         async for event in self._get_missing_events():
             logger.extra_debug(f"Ignoring event '{event.id}'")
-            try:
-                await self._db.execute(
-                    "INSERT INTO events VALUES "
-                    f"('{event.id}', '{event.type.value}', '{event.camera_id}',"
-                    f"'{event.start.timestamp()}', '{event.end.timestamp()}')"
-                )
-            except IntegrityError:
+            if not await insert_event(self._db, event):
                 logger.debug(f"Event {event.id} already exists in database, skipping")
         await self._db.commit()
 

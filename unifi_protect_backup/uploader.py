@@ -5,8 +5,6 @@ import pathlib
 import re
 from datetime import datetime
 
-from sqlite3 import IntegrityError
-
 import aiosqlite
 from uiprotect import ProtectApiClient
 from uiprotect.data.nvr import Event
@@ -16,6 +14,7 @@ from unifi_protect_backup.utils import (
     VideoQueue,
     get_camera_name,
     human_readable_size,
+    insert_event,
     run_command,
     setup_event_logger,
 )
@@ -86,10 +85,15 @@ class VideoUploader:
 
                 try:
                     await self._upload_video(video, destination, self._rclone_args)
-                    await self._update_database(event, destination)
-                    self.logger.debug("Uploaded")
-                except IntegrityError:
-                    self.logger.debug(f" Event {event.id} already exists in database, skipping")
+                    if await self._update_database(event, destination):
+                        self.logger.debug("Uploaded")
+                    else:
+                        # Lost a race: another task recorded this event while we were
+                        # uploading. The upload already happened and overwrote the
+                        # existing object, so this is worth knowing about.
+                        self.logger.warning(
+                            f" Event {event.id} was already backed up; this upload overwrote it"
+                        )
                 except SubprocessException:
                     self.logger.error(f" Failed to upload file: '{destination}'")
 
@@ -117,24 +121,25 @@ class VideoUploader:
         if returncode != 0:
             raise SubprocessException(stdout, stderr, returncode)
 
-    async def _update_database(self, event: Event, destination: str):
-        """Add the backed up event to the database along with where it was backed up to."""
-        assert isinstance(event.start, datetime)
-        assert isinstance(event.end, datetime)
-        await self._db.execute(
-            "INSERT INTO events VALUES "
-            f"('{event.id}', '{event.type.value}', '{event.camera_id}',"
-            f"'{event.start.timestamp()}', '{event.end.timestamp()}')"
-        )
+    async def _update_database(self, event: Event, destination: str) -> bool:
+        """Add the backed up event to the database along with where it was backed up to.
+
+        Returns:
+            bool: False if this event was already recorded, in which case no `backups` row
+                  is written either. A duplicate event must not gain a second backup row.
+
+        """
+        if not await insert_event(self._db, event):
+            return False
 
         remote, file_path = str(destination).split(":")
         await self._db.execute(
-            f"""INSERT INTO backups VALUES
-                ('{event.id}', '{remote}', '{file_path}')
-            """
+            "INSERT INTO backups VALUES (?, ?, ?)",
+            (event.id, remote, file_path),
         )
 
         await self._db.commit()
+        return True
 
     async def _generate_file_path(self, event: Event) -> pathlib.Path:
         """Generate the rclone destination path for the provided event.
