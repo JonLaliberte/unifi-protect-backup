@@ -66,6 +66,7 @@ class _Uploader(VideoUploader):
 
 @pytest.fixture
 async def db():
+    """Build an in-memory database using the real production schema."""
     connection = await create_database(":memory:")
     yield connection
     await connection.close()

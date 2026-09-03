@@ -23,6 +23,7 @@ BASE = datetime(2026, 9, 1, 12, 0, 0, tzinfo=timezone.utc)
 
 
 def make_event(n: int) -> Event:
+    """Build a completed motion event."""
     return Event.model_construct(
         id=f"event-{n:04d}",
         type=EventType.MOTION,
@@ -41,24 +42,28 @@ class _Protect:
     """
 
     def __init__(self, events):
+        """Init."""
         self._events = events
         self.calls = 0
         self.connect_event = asyncio.Event()
         self.connect_event.set()
 
     async def get_events(self, **kwargs):
+        """Return the chunk once, then report exhaustion."""
         self.calls += 1
         return self._events if self.calls == 1 else []
 
 
 class _Downloader:
     def __init__(self):
+        """Init."""
         self.download_queue = asyncio.Queue()
         self.upload_queue = VideoQueue(1024)
         self.current_event = None
 
 
 def make_checker(db, events):
+    """Build a checker wired to stub Protect and downloader objects."""
     return MissingEventChecker(
         protect=_Protect(events),
         db=db,
@@ -74,16 +79,19 @@ def make_checker(db, events):
 
 @pytest.fixture
 async def db():
+    """Build an in-memory database using the real production schema."""
     connection = await create_database(":memory:")
     yield connection
     await connection.close()
 
 
 async def collect(checker):
+    """Drain the checker's generator into a list of event IDs."""
     return [event.id async for event in checker._get_missing_events()]
 
 
 async def test_events_already_backed_up_are_excluded(db):
+    """Events already recorded must not be offered for re-download."""
     events = [make_event(n) for n in range(5)]
     await insert_event(db, events[1])
     await insert_event(db, events[3])
@@ -93,6 +101,7 @@ async def test_events_already_backed_up_are_excluded(db):
 
 
 async def test_nothing_backed_up_yields_everything(db):
+    """With an empty database every event is missing."""
     events = [make_event(n) for n in range(5)]
     assert len(await collect(make_checker(db, events))) == 5
 

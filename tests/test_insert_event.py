@@ -44,7 +44,7 @@ def _event(event_id: str = "f9f5a34b-867d-4001-9b42-c3429c1785df", camera_id: st
 
 @pytest.fixture
 async def db():
-    """An in-memory database using the real production schema."""
+    """Build an in-memory database using the real production schema."""
     connection = await create_database(":memory:")
     yield connection
     await connection.close()

@@ -119,9 +119,7 @@ class VideoUploader:
                         else:
                             # Lost a race the checks above could not see. The upload has
                             # already happened and overwritten the existing object.
-                            self.logger.warning(
-                                f" Event {event.id} was already backed up; this upload overwrote it"
-                            )
+                            self.logger.warning(f" Event {event.id} was already backed up; this upload overwrote it")
                     except SubprocessException:
                         self.logger.error(f" Failed to upload file: '{destination}'")
                 finally:

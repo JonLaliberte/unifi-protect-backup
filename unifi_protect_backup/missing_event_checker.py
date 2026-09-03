@@ -103,9 +103,7 @@ class MissingEventChecker:
                 batch = chunk_ids[i : i + SQL_MAX_VARIABLES]
                 # Only `?` placeholders are interpolated here; the IDs are bound.
                 placeholders = ",".join("?" * len(batch))
-                async with self._db.execute(
-                    f"SELECT id FROM events WHERE id IN ({placeholders})", batch
-                ) as cursor:
+                async with self._db.execute(f"SELECT id FROM events WHERE id IN ({placeholders})", batch) as cursor:
                     db_event_ids.update(row[0] for row in await cursor.fetchall())
 
             # Prevent re-adding events currently in the download/upload queue
