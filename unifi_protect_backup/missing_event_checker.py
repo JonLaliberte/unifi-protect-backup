@@ -96,9 +96,10 @@ class MissingEventChecker:
             # Get list of events that have been backed up from the database.
             #
             # Only this chunk's IDs are ever tested against `existing_ids` below, so ask
-            # for those rather than the whole table. Reading every row cost ~535MB and
-            # ~3s of event loop time on a 1.35M row database, once per chunk, every
-            # interval, while the download buffer already holds up to 512MiB.
+            # for those rather than the whole table. On a 1.35M row database the full read
+            # measured ~3.5s and a 541MB peak, once per chunk, once per interval. Most of
+            # that time is in aiosqlite's worker thread; the memory is the part that bites,
+            # since it lands next to a download buffer that can hold 512MiB.
             db_event_ids: Set[str] = set()
             chunk_ids = list(unifi_events)
             for i in range(0, len(chunk_ids), SQL_MAX_VARIABLES):
