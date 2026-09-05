@@ -1,6 +1,7 @@
 """Monkey patch new download method into uiprotect till PR is merged."""
 
 import enum
+import secrets
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -71,7 +72,12 @@ def monkey_patch_experimental_downloader():
         if not filename:
             start_str = start.strftime("%m-%d-%Y, %H.%M.%S %Z")
             end_str = end.strftime("%m-%d-%Y, %H.%M.%S %Z")
-            filename = f"{camera_id} {start_str} - {end_str}.mp4"
+            # LOCAL ONLY - do not include in upstream PRs. Protect keys prepared exports
+            # by filename, and this name is derived purely from the camera and the event
+            # times, so two clients backing up the same NVR generate the same name and
+            # collide. That only happens here when a test container runs alongside
+            # production, which is not a situation upstream users are in.
+            filename = f"{camera_id} {start_str} - {end_str} {secrets.token_hex(8)}.mp4"
 
         params["filename"] = filename
 
