@@ -6,6 +6,7 @@ import re
 from datetime import datetime
 from typing import Optional, Set
 
+import aiosqlite
 from apprise import NotifyType
 from async_lru import alru_cache
 from uiprotect import ProtectApiClient
@@ -281,6 +282,43 @@ def normalize_event_id(event_id: str) -> str:
         return m.group(1)
     # Unknown format — return unchanged
     return event_id
+
+
+async def insert_event(db: aiosqlite.Connection, event: Event) -> bool:
+    """Record `event` in the `events` table.
+
+    This is the single writer for that table. Every caller that needs to mark an event as
+    handled (backed up, ignored, or skipped) goes through here so the duplicate handling
+    stays consistent.
+
+    Note: this does NOT commit. Callers commit, which lets a caller insert a related
+    `backups` row in the same transaction. Callers that do so MUST check the return value
+    first — a duplicate event must not gain a second `backups` row.
+
+    Args:
+        db (aiosqlite.Connection): Database to write to
+        event (Event): The event to record
+
+    Returns:
+        bool: True if the row was written, False if this event was already recorded.
+
+    """
+    assert isinstance(event.start, datetime)
+    assert isinstance(event.end, datetime)
+    # `ON CONFLICT(id) DO NOTHING` rather than catching IntegrityError, so that only a
+    # repeated event is treated as "already recorded". Any other integrity failure still
+    # raises instead of being reported as a duplicate.
+    cursor = await db.execute(
+        "INSERT INTO events VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING",
+        (
+            event.id,
+            event.type.value,
+            event.camera_id,
+            event.start.timestamp(),
+            event.end.timestamp(),
+        ),
+    )
+    return cursor.rowcount == 1
 
 
 def human_readable_size(num: float):

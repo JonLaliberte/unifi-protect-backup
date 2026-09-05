@@ -287,18 +287,8 @@ class UnifiProtectBackup:
 
             # Create upload tasks
             #   This will upload the videos in the downloader's buffer to the rclone remotes and log it in the database
-            uploaders = []
-            for _ in range(self._parallel_uploads):
-                uploader = VideoUploader(
-                    self._protect,
-                    upload_queue,
-                    self.rclone_destination,
-                    self.rclone_args,
-                    self.file_structure_format,
-                    self._db,
-                    self.color_logging,
-                )
-                uploaders.append(uploader)
+            uploaders = self._create_uploaders(upload_queue)
+            for uploader in uploaders:
                 tasks.append(uploader.start())
 
             # Create event listener task
@@ -352,6 +342,40 @@ class UnifiProtectBackup:
             logger.error("Unexpected exception occurred in main loop:", exc_info=e)
             await asyncio.sleep(10)  # Give remaining tasks a chance to complete e.g sending notifications
             raise
+
+    def _create_uploaders(self, upload_queue: VideoQueue) -> List[VideoUploader]:
+        """Build the pool of uploaders that drain `upload_queue`.
+
+        Extracted from `start()` purely so the shared-set wiring below can be tested.
+        Every uploader must receive the *same* set object: the parameter defaults to a
+        private set, so dropping the argument here leaves each uploader guarding only
+        against itself and silently restores the race that `--parallel-uploads > 1`
+        was fixed for. While this lived inline in `start()` no test could see that.
+
+        Args:
+            upload_queue (VideoQueue): Queue of downloaded videos, shared by every uploader
+
+        Returns:
+            List[VideoUploader]: `--parallel-uploads` uploaders sharing one in-flight set
+
+        """
+        # Shared by every uploader so two of them cannot upload the same event at
+        # once. The database only records a backup after rclone returns, so it cannot
+        # close that window on its own.
+        uploading_event_ids: set[str] = set()
+        return [
+            VideoUploader(
+                self._protect,
+                upload_queue,
+                self.rclone_destination,
+                self.rclone_args,
+                self.file_structure_format,
+                self._db,
+                self.color_logging,
+                uploading_event_ids,
+            )
+            for _ in range(self._parallel_uploads)
+        ]
 
     async def _check_rclone(self) -> None:
         """Check if rclone is installed and the specified remote is configured.

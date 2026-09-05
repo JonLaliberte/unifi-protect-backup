@@ -4,8 +4,7 @@ import logging
 import pathlib
 import re
 from datetime import datetime
-
-from sqlite3 import IntegrityError
+from typing import Optional, Set
 
 import aiosqlite
 from uiprotect import ProtectApiClient
@@ -16,6 +15,7 @@ from unifi_protect_backup.utils import (
     VideoQueue,
     get_camera_name,
     human_readable_size,
+    insert_event,
     run_command,
     setup_event_logger,
 )
@@ -36,6 +36,7 @@ class VideoUploader:
         file_structure_format: str,
         db: aiosqlite.Connection,
         color_logging: bool,
+        uploading_event_ids: Optional[Set[str]] = None,
     ):
         """Init.
 
@@ -47,6 +48,10 @@ class VideoUploader:
             file_structure_format (str): format string for how to structure the uploaded files
             db (aiosqlite.Connection): Async SQlite database connection
             color_logging (bool):  Whether or not to add color to logging output
+            uploading_event_ids (Optional[Set[str]]): IDs currently being uploaded, shared by every
+                uploader. The database check alone cannot stop two uploaders racing, since
+                the row is only written once the upload finishes. Defaults to a private set,
+                which is correct when there is only one uploader.
 
         """
         self._protect: ProtectApiClient = protect
@@ -56,6 +61,7 @@ class VideoUploader:
         self._file_structure_format: str = file_structure_format
         self._db: aiosqlite.Connection = db
         self.current_event = None
+        self._uploading_event_ids: Set[str] = uploading_event_ids if uploading_event_ids is not None else set()
 
         self.base_logger = logging.getLogger(__name__)
         setup_event_logger(self.base_logger, color_logging)
@@ -71,6 +77,8 @@ class VideoUploader:
         while True:
             try:
                 event, video = await self.upload_queue.get()
+                # Set before the checks below so the missing event checker's in-flight
+                # guard can still see this event while we decide what to do with it.
                 self.current_event = event
 
                 self.logger = logging.LoggerAdapter(self.base_logger, {"event": f" [{event.id}]"})
@@ -81,22 +89,57 @@ class VideoUploader:
                     f" ({human_readable_size(self.upload_queue.qsize())})"
                 )
 
-                destination = await self._generate_file_path(event)
-                self.logger.debug(f" Destination: {destination}")
+                # Claim the event before the first await. Checking and adding with no
+                # suspension point in between is what makes this atomic across uploaders;
+                # the database check below cannot do it, because the row is not written
+                # until the upload finishes.
+                if event.id in self._uploading_event_ids:
+                    self.logger.debug(f" Event {event.id} is already being uploaded, skipping")
+                    self.current_event = None
+                    continue
+                self._uploading_event_ids.add(event.id)
 
                 try:
-                    await self._upload_video(video, destination, self._rclone_args)
-                    await self._update_database(event, destination)
-                    self.logger.debug("Uploaded")
-                except IntegrityError:
-                    self.logger.debug(f" Event {event.id} already exists in database, skipping")
-                except SubprocessException:
-                    self.logger.error(f" Failed to upload file: '{destination}'")
+                    # Check before writing, not after. `rclone rcat` overwrites silently,
+                    # so uploading an event that is already backed up destroys the object
+                    # in the remote and, on storage with a minimum retention like Glacier,
+                    # bills for the early delete. Detecting the duplicate afterwards costs
+                    # the full download and upload regardless of whether it is caught.
+                    if await self._is_recorded(event):
+                        self.logger.debug(f" Event {event.id} already backed up, skipping upload")
+                        continue
 
-                self.current_event = None
+                    destination = await self._generate_file_path(event)
+                    self.logger.debug(f" Destination: {destination}")
+
+                    try:
+                        await self._upload_video(video, destination, self._rclone_args)
+                        if await self._update_database(event, destination):
+                            self.logger.debug("Uploaded")
+                        else:
+                            # Lost a race the checks above could not see. The upload has
+                            # already happened and overwritten the existing object.
+                            self.logger.warning(f" Event {event.id} was already backed up; this upload overwrote it")
+                    except SubprocessException:
+                        self.logger.error(f" Failed to upload file: '{destination}'")
+                finally:
+                    self._uploading_event_ids.discard(event.id)
+                    self.current_event = None
 
             except Exception as e:
                 self.logger.error(f"Unexpected exception occurred, abandoning event {event.id}:", exc_info=e)
+
+    async def _is_recorded(self, event: Event) -> bool:
+        """Return True if a completed backup for this event is already in the database.
+
+        Only sees *finished* backups: the row is written after rclone returns. The
+        in-flight set in `start()` covers the window this cannot.
+
+        The lookup is served entirely by the primary key's index
+        (`SEARCH events USING COVERING INDEX`), so it does not read the table.
+        """
+        async with self._db.execute("SELECT 1 FROM events WHERE id = ?", (event.id,)) as cursor:
+            return await cursor.fetchone() is not None
 
     async def _upload_video(self, video: bytes, destination: pathlib.Path, rclone_args: str):
         """Upload video using rclone.
@@ -117,24 +160,32 @@ class VideoUploader:
         if returncode != 0:
             raise SubprocessException(stdout, stderr, returncode)
 
-    async def _update_database(self, event: Event, destination: str):
-        """Add the backed up event to the database along with where it was backed up to."""
-        assert isinstance(event.start, datetime)
-        assert isinstance(event.end, datetime)
-        await self._db.execute(
-            "INSERT INTO events VALUES "
-            f"('{event.id}', '{event.type.value}', '{event.camera_id}',"
-            f"'{event.start.timestamp()}', '{event.end.timestamp()}')"
-        )
+    async def _update_database(self, event: Event, destination: pathlib.Path) -> bool:
+        """Add the backed up event to the database along with where it was backed up to.
 
-        remote, file_path = str(destination).split(":")
+        Returns:
+            bool: False if this event was already recorded, in which case no `backups` row
+                  is written either. A duplicate event must not gain a second backup row.
+
+        """
+        if not await insert_event(self._db, event):
+            # Nothing of ours was written, but the INSERT still opened a transaction and
+            # took the write lock. Commit to close it rather than leaving it for whichever
+            # unrelated task commits next. Rollback would be wrong here: every component
+            # shares this connection, so it would discard their pending writes too.
+            await self._db.commit()
+            return False
+
+        # Split once: the remote name is everything before the first colon, and an
+        # rclone path may legally contain further colons.
+        remote, file_path = str(destination).split(":", 1)
         await self._db.execute(
-            f"""INSERT INTO backups VALUES
-                ('{event.id}', '{remote}', '{file_path}')
-            """
+            "INSERT INTO backups VALUES (?, ?, ?)",
+            (event.id, remote, file_path),
         )
 
         await self._db.commit()
+        return True
 
     async def _generate_file_path(self, event: Event) -> pathlib.Path:
         """Generate the rclone destination path for the provided event.

@@ -62,13 +62,13 @@ class Purge:
                 # For every event older than the retention time
                 retention_oldest_time = time.mktime((datetime.now() - self.retention).timetuple())
                 async with self._db.execute(
-                    f"SELECT * FROM events WHERE end < {retention_oldest_time}"
+                    "SELECT * FROM events WHERE end < ?", (retention_oldest_time,)
                 ) as event_cursor:
                     async for event_id, event_type, camera_id, event_start, event_end in event_cursor:  # noqa: B007
                         logger.info(f"Purging event: {event_id}.")
 
                         # For every backup for this event
-                        async with self._db.execute(f"SELECT * FROM backups WHERE id = '{event_id}'") as backup_cursor:
+                        async with self._db.execute("SELECT * FROM backups WHERE id = ?", (event_id,)) as backup_cursor:
                             async for _, remote, file_path in backup_cursor:
                                 await delete_file(f"{remote}:{file_path}", self.rclone_purge_args)
                                 logger.debug(f" Deleted: {remote}:{file_path}")
@@ -76,7 +76,7 @@ class Purge:
 
                         # delete event from database
                         # entries in the `backups` table are automatically deleted by sqlite triggers
-                        await self._db.execute(f"DELETE FROM events WHERE id = '{event_id}'")
+                        await self._db.execute("DELETE FROM events WHERE id = ?", (event_id,))
                         await self._db.commit()
 
                 if deleted_a_file:

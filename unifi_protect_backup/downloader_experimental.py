@@ -7,8 +7,6 @@ import shutil
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlite3 import IntegrityError
-
 import aiosqlite
 import pytz
 from aiohttp.client_exceptions import ClientPayloadError
@@ -24,6 +22,7 @@ from unifi_protect_backup.utils import (
     VideoQueue,
     get_camera_name,
     human_readable_size,
+    insert_event,
     run_command,
     setup_event_logger,
 )
@@ -215,13 +214,7 @@ class VideoDownloaderExperimental:
 
     async def _ignore_event(self, event):
         self.logger.warning("Ignoring event")
-        try:
-            await self._db.execute(
-                "INSERT INTO events VALUES "
-                f"('{event.id}', '{event.type.value}', '{event.camera_id}',"
-                f"'{event.start.timestamp()}', '{event.end.timestamp()}')"
-            )
-        except IntegrityError:
+        if not await insert_event(self._db, event):
             self.logger.debug(f"Event {event.id} already exists in database, skipping")
         await self._db.commit()
 
